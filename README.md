@@ -4,7 +4,7 @@
     <img src="https://img.shields.io/badge/CCDS-Project%20template-328F97?logo=cookiecutter" />
 </a>
 
-An end to end machine learning pipeline for for forecasting Great Briteain electricity demand, imbalance and market signals.
+An end to end machine learning pipeline for for forecasting Great Britain electricity demand, imbalance and market signals.
 
 ## Project Organization
 
