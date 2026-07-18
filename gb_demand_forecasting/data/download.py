@@ -134,9 +134,29 @@ def main(
     return file_paths
 
 
-if __name__ == "__main__":
-    args = parse_args()
-    if args.start_year is not None:
-        main(start_year=args.start_year, end_year=args.end_year)
+def interactive_prompt():
+    """Prompt the user interactively for year selection."""
+    print("NESO Historic Demand Data Downloader")
+    print("=====================================")
+    mode = input("Download a single year or a range? [single/range]: ").strip().lower()
+
+    if mode == "range":
+        start_year = int(input("Enter start year: ").strip())
+        end_year = int(input("Enter end year: ").strip())
+        main(start_year=start_year, end_year=end_year)
     else:
-        main(year=args.year)
+        year = input(f"Enter year (default {DEFAULT_YEAR}): ").strip()
+        main(year=int(year) if year else DEFAULT_YEAR)
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1:
+        args = parse_args()
+        if args.start_year is not None:
+            main(start_year=args.start_year, end_year=args.end_year)
+        else:
+            main(year=args.year)
+    else:
+        interactive_prompt()
