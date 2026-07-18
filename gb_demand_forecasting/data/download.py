@@ -3,10 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from gb_demand_forecasting.data.api import (
-    download_resource,
-    get_demand_resources,
-)
+from gb_demand_forecasting.data import download_resource, get_demand_resources
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
