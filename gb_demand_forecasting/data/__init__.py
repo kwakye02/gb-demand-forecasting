@@ -1,2 +1,1 @@
-from gb_demand_forecasting.data.api import get_demand_resources,download_resource
-from gb_demand_forecasting.data.download import main
+from gb_demand_forecasting.data.demand.download import get_demand_resources, download_resource, main

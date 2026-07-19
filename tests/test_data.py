@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from gb_demand_forecasting.data import download
+from gb_demand_forecasting.data.demand import download
 
 
 def test_raw_data_directory_points_to_repository_data_folder():
