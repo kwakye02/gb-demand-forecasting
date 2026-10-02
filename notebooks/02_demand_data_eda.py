@@ -111,7 +111,6 @@ ax[1].set_title("England & Wales Demand (MW)")
 ax[1].set_ylabel("EW Demand (MW)")
 plt.show()
 
-
 #daily pattern 
 hourly_demand = df.groupby('hour')['ND'].mean()
 
