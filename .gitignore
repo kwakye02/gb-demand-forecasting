@@ -193,7 +193,6 @@ cython_debug/
 mlflow.db
 notebooks/mlruns/
 notebooks/archive/
-/reference/
 /mlruns/
 /outputs/predictions/
 # CatBoost training logs
