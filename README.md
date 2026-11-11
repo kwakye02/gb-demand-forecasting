@@ -1,16 +1,15 @@
 # GB Electricity Demand Forecasting
 
 A day-ahead forecast of Great Britain's national electricity demand (half-hourly, 48 periods a
-day), built to be **honest about what is known at forecast time** and benchmarked against the
-forecast that NESO/Elexon publish for the same day.
+day). Benchmarked against the forecast that NESO/Elexon publish for the same day.
 
 Every forecast is made at **08:30 UK time on the day before**. Nothing published after that
 moment is used, in training or in the live run.
 
 ## Results
 
-Mean absolute error on National Demand (`ND`), in MW, over all half-hours of each year. Lower is
-better. The model is trained only on days before the year it is scored on.
+Mean absolute error on National Demand (`ND`), in MW, over all half-hours of each year.
+The model is trained only on days before the year it is scored on.
 
 | Year | Seasonal naive | This model | NESO/Elexon day-ahead |
 |---|---|---|---|
