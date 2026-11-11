@@ -174,21 +174,6 @@ def test_fetch_historical_weather_uses_archive_endpoint_and_era5_model():
     assert len(dataframe) == 2
 
 
-def test_fetch_historical_forecast_uses_historical_forecast_endpoint():
-    session = FakeSession(weather_payload())
-    locations = (api.WeatherLocation("london", 51.5, -0.1),)
-
-    api.fetch_historical_forecast(
-        start_date="2025-01-01",
-        end_date="2025-01-01",
-        locations=locations,
-        hourly=("temperature_2m",),
-        session=session,
-    )
-
-    assert session.calls[0]["url"] == api.HISTORICAL_FORECAST_URL
-
-
 def test_fetch_live_forecast_uses_forecast_endpoint_without_current_weather():
     session = FakeSession(weather_payload())
     locations = (api.WeatherLocation("london", 51.5, -0.1),)
@@ -284,40 +269,6 @@ def test_fetch_chunked_historical_weather_saves_and_reuses_chunks(monkeypatch, t
 
     assert len(second_result) == 4
     assert calls == []
-
-
-def test_fetch_chunked_historical_forecast_uses_monthly_chunks(monkeypatch, tmp_path):
-    calls = []
-    locations = (api.WeatherLocation("london", 51.5, -0.1),)
-
-    def fake_fetch_historical_forecast(
-        start_date,
-        end_date,
-        locations,
-        hourly,
-        session,
-    ):
-        calls.append((start_date, end_date))
-        return yearly_weather_frame(start_date[:4]).assign(source="historical_forecast")
-
-    monkeypatch.setattr(api, "fetch_historical_forecast", fake_fetch_historical_forecast)
-
-    result = api.fetch_chunked_historical_forecast(
-        start_date="2022-01-01",
-        end_date="2022-02-01",
-        locations=locations,
-        hourly=("temperature_2m",),
-        chunk_cache_directory=tmp_path,
-        sleep_seconds=0,
-    )
-
-    assert len(result) == 2
-    assert calls == [
-        ("2022-01-01", "2022-01-31"),
-        ("2022-02-01", "2022-02-01"),
-    ]
-    assert (tmp_path / "gb_historical_forecast_2022-01-01_2022-01-31.parquet").exists()
-    assert (tmp_path / "gb_historical_forecast_2022-02-01_2022-02-01.parquet").exists()
 
 
 def test_build_output_path_uses_parquet_suffix():

@@ -1,6 +1,7 @@
 """Shared I/O utility functions for validation across raw data files."""
 
 from pathlib import Path
+
 import pandas as pd
 import pyarrow.parquet as pq
 
@@ -9,6 +10,7 @@ def get_csv_columns(file_path):
     """Read only the header row of a CSV file to get its columns."""
     columns = pd.read_csv(file_path, nrows=0).columns.tolist()
     return columns
+
 
 def get_parquet_columns(file_path):
     """Get column names of a parquet file without loading data."""

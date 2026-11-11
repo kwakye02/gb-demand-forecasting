@@ -3,7 +3,7 @@
 #################################################################################
 
 PROJECT_NAME = gb-demand-imbalance-forecasting
-PYTHON_VERSION = 3.10
+PYTHON_VERSION = 3.11
 PYTHON_INTERPRETER = python
 
 #################################################################################
@@ -14,7 +14,7 @@ PYTHON_INTERPRETER = python
 ## Install Python dependencies
 .PHONY: requirements
 requirements:
-	pip install -e .
+	pip install -e .[notebooks,dev]
 	
 
 
@@ -62,10 +62,10 @@ create_environment:
 #################################################################################
 
 
-## Make dataset
+## Download and refresh the data
 .PHONY: data
-data: requirements
-	$(PYTHON_INTERPRETER) gb_demand_imbalance_forecasting/dataset.py
+data:
+	$(PYTHON_INTERPRETER) main.py
 
 
 #################################################################################

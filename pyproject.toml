@@ -16,26 +16,33 @@ classifiers = [
     "License :: OSI Approved :: MIT License"
 ]
 dependencies = [
-    "ipython",
-    "jupyterlab",
-    "loguru",
-    "matplotlib",
-    "mkdocs",
-    "notebook",
+    "catboost",
+    "holidays",
+    "mlflow",
     "numpy",
     "pandas",
-    "pip",
-    "pytest",
-    "python-dotenv",
     "pyarrow",
+    "requests",
     "requests-cache",
     "retry-requests",
-    "ruff",
     "scikit-learn",
-    "tqdm",
-    "typer",
+    "skops",
 ]
 requires-python = ">=3.10"
+
+[project.optional-dependencies]
+notebooks = [
+    "ipython",
+    "jupyterlab",
+    "lightgbm",
+    "matplotlib",
+    "seaborn",
+    "statsmodels",
+]
+dev = [
+    "pytest",
+    "ruff",
+]
 
 
 [tool.ruff]

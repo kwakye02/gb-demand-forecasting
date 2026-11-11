@@ -1,1 +1,1 @@
-from gb_demand_forecasting.data.demand.download import get_demand_resources, download_resource, main
+"""Data ingestion: Elexon demand and Open-Meteo weather, and the merged modelling dataset."""

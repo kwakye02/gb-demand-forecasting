@@ -1,16 +1,14 @@
 import argparse
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 import time
 
 import pandas as pd
 import requests
 
-
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 HISTORICAL_WEATHER_URL = "https://archive-api.open-meteo.com/v1/archive"
-HISTORICAL_FORECAST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
+PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RAW_WEATHER_DIRECTORY = PROJECT_ROOT / "data" / "raw" / "open_meteo"
@@ -121,9 +119,7 @@ def build_weather_params(
         "wind_speed_unit": "ms",
         "precipitation_unit": "mm",
     }
-    params.update(
-        {key: value for key, value in extra_params.items() if value is not None}
-    )
+    params.update({key: value for key, value in extra_params.items() if value is not None})
     return params
 
 
@@ -276,7 +272,23 @@ def request_open_meteo(
                 continue
             raise
 
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError:
+            cache = getattr(client, "cache", None)
+
+            if cache is not None:
+                cache.delete(urls=[response.url])
+
+            if attempt < max_attempts:
+                wait_seconds = rate_limit_wait_seconds * attempt
+                print(
+                    "Open-Meteo returned an incomplete response. "
+                    f"Waiting {wait_seconds} seconds before retry {attempt + 1}/{max_attempts}."
+                )
+                time.sleep(wait_seconds)
+                continue
+            raise
 
         if isinstance(payload, dict) and payload.get("error"):
             raise RuntimeError(payload.get("reason", "Open-Meteo request failed."))
@@ -345,26 +357,18 @@ def validate_weather_frame(dataframe, expected_hourly=DEFAULT_HOURLY_VARIABLES):
     if missing:
         raise ValueError(f"Missing columns: {sorted(missing)}")
 
-    duplicates = dataframe.duplicated(
-        subset=["source", "location_name", "time"]
-    )
+    duplicates = dataframe.duplicated(subset=["source", "location_name", "time"])
 
     if duplicates.any():
         raise ValueError(f"Found {duplicates.sum():,} duplicate weather rows.")
 
     for location_name, group in dataframe.groupby("location_name"):
-        intervals = (
-            group.sort_values("time")["time"]
-            .diff()
-            .dropna()
-        )
+        intervals = group.sort_values("time")["time"].diff().dropna()
 
         invalid = intervals != pd.Timedelta(hours=1)
 
         if invalid.any():
-            print(
-                f"Warning: {invalid.sum():,} non-hourly intervals for {location_name}."
-            )
+            print(f"Warning: {invalid.sum():,} non-hourly intervals for {location_name}.")
 
     return dataframe
 
@@ -409,11 +413,14 @@ def fetch_chunked_historical_weather(
         chunk_path = None
 
         if chunk_cache_directory:
-            chunk_path = Path(chunk_cache_directory) / build_chunk_output_path(
-                "historical_weather",
-                chunk_start,
-                chunk_end,
-            ).name
+            chunk_path = (
+                Path(chunk_cache_directory)
+                / build_chunk_output_path(
+                    "historical_weather",
+                    chunk_start,
+                    chunk_end,
+                ).name
+            )
 
         if chunk_path and chunk_path.exists():
             print(f"Using cached chunk {chunk_path.name}")
@@ -448,56 +455,114 @@ def fetch_chunked_historical_weather(
     dataframe = pd.concat(frames, ignore_index=True)
 
     return (
-        dataframe
-        .sort_values(["location_name", "time"])
+        dataframe.sort_values(["location_name", "time"])
         .drop_duplicates(["location_name", "time"])
         .reset_index(drop=True)
     )
 
 
-def fetch_historical_forecast(
-    start_date,
-    end_date,
+def fetch_live_forecast(
+    forecast_days=7,
     locations=GB_WEATHER_LOCATIONS,
     hourly=DEFAULT_HOURLY_VARIABLES,
     session=None,
+    models=None,
 ):
     params = build_weather_params(
         locations=locations,
         hourly=hourly,
-        start_date=start_date,
-        end_date=end_date,
+        forecast_days=forecast_days,
+        models=models,
     )
-    payload = request_open_meteo(HISTORICAL_FORECAST_URL, params, session=session)
+    payload = request_open_meteo(FORECAST_URL, params, session=session)
     return hourly_response_to_frame(
         payload,
         locations=locations,
-        source="historical_forecast",
+        source="live_forecast",
     )
 
 
-def fetch_chunked_historical_forecast(
+# rain and snowfall are largely empty in the Previous Runs archive, so they are left out.
+PREVIOUS_RUNS_VARIABLES = (
+    "temperature_2m",
+    "relative_humidity_2m",
+    "apparent_temperature",
+    "precipitation",
+    "cloud_cover",
+    "wind_speed_10m",
+    "wind_direction_10m",
+    "shortwave_radiation",
+)
+DEFAULT_PREVIOUS_RUNS_LEAD_DAYS = (1, 2)
+# Pinned so 2025 validation and 2026 test inputs come from one model. Chosen as the most
+# accurate vs ERA5 over all of 2025 (national-mean MAE rank: ecmwf 1.5, icon 1.8, gfs 2.7).
+# KNOWN GAP: ecmwf_ifs025 has no cloud cover for 2026-04-17 15:00 to 2026-04-22 23:00 UTC
+# (Open-Meteo archive; all 9 cities), so local days 17-23 Apr 2026 need excluding from
+# evaluation if cloud_cover is a feature. icon_seamless has its own gap (2026-04-10 01:00 to
+# 04-11 11:00, cloud cover and shortwave radiation); gfs_seamless has none but is least accurate.
+PINNED_PREVIOUS_RUNS_MODEL = "ecmwf_ifs025"
+
+
+def previous_runs_columns(
+    variables=PREVIOUS_RUNS_VARIABLES,
+    lead_days=DEFAULT_PREVIOUS_RUNS_LEAD_DAYS,
+):
+    return tuple(
+        f"{variable}_previous_day{lead_day}" for variable in variables for lead_day in lead_days
+    )
+
+
+def fetch_previous_runs(
     start_date,
     end_date,
     locations=GB_WEATHER_LOCATIONS,
-    hourly=DEFAULT_HOURLY_VARIABLES,
+    variables=PREVIOUS_RUNS_VARIABLES,
+    lead_days=DEFAULT_PREVIOUS_RUNS_LEAD_DAYS,
+    session=None,
+    models=None,
+):
+    params = build_weather_params(
+        locations=locations,
+        hourly=previous_runs_columns(variables, lead_days),
+        start_date=start_date,
+        end_date=end_date,
+        models=models,
+    )
+    payload = request_open_meteo(PREVIOUS_RUNS_URL, params, session=session)
+    return hourly_response_to_frame(
+        payload,
+        locations=locations,
+        source="previous_runs",
+    )
+
+
+def fetch_chunked_previous_runs(
+    start_date,
+    end_date,
+    locations=GB_WEATHER_LOCATIONS,
+    variables=PREVIOUS_RUNS_VARIABLES,
+    lead_days=DEFAULT_PREVIOUS_RUNS_LEAD_DAYS,
     session=None,
     chunk_cache_directory=None,
     sleep_seconds=DEFAULT_CHUNK_DELAY_SECONDS,
-    chunk_frequency="month",
+    models=None,
 ):
     frames = []
-    chunks = create_date_chunks(start_date, end_date, frequency=chunk_frequency)
+    columns = previous_runs_columns(variables, lead_days)
+    chunks = create_date_chunks(start_date, end_date, frequency="month")
 
     for chunk_index, (chunk_start, chunk_end) in enumerate(chunks):
         chunk_path = None
 
         if chunk_cache_directory:
-            chunk_path = Path(chunk_cache_directory) / build_chunk_output_path(
-                "historical_forecast",
-                chunk_start,
-                chunk_end,
-            ).name
+            chunk_path = (
+                Path(chunk_cache_directory)
+                / build_chunk_output_path(
+                    "previous_runs",
+                    chunk_start,
+                    chunk_end,
+                ).name
+            )
 
         if chunk_path and chunk_path.exists():
             print(f"Using cached chunk {chunk_path.name}")
@@ -505,18 +570,20 @@ def fetch_chunked_historical_forecast(
         else:
             print(f"Downloading {chunk_start} to {chunk_end}")
 
-            chunk = fetch_historical_forecast(
+            chunk = fetch_previous_runs(
                 start_date=chunk_start,
                 end_date=chunk_end,
                 locations=locations,
-                hourly=hourly,
+                variables=variables,
+                lead_days=lead_days,
                 session=session,
+                models=models,
             )
 
             if chunk.empty:
                 raise RuntimeError(f"No data returned for {chunk_start} to {chunk_end}.")
 
-            validate_weather_frame(chunk, expected_hourly=hourly)
+            validate_weather_frame(chunk, expected_hourly=columns)
 
             if chunk_path:
                 save_weather_frame(chunk, chunk_path)
@@ -531,29 +598,9 @@ def fetch_chunked_historical_forecast(
     dataframe = pd.concat(frames, ignore_index=True)
 
     return (
-        dataframe
-        .sort_values(["location_name", "time"])
+        dataframe.sort_values(["location_name", "time"])
         .drop_duplicates(["location_name", "time"])
         .reset_index(drop=True)
-    )
-
-
-def fetch_live_forecast(
-    forecast_days=7,
-    locations=GB_WEATHER_LOCATIONS,
-    hourly=DEFAULT_HOURLY_VARIABLES,
-    session=None,
-):
-    params = build_weather_params(
-        locations=locations,
-        hourly=hourly,
-        forecast_days=forecast_days,
-    )
-    payload = request_open_meteo(FORECAST_URL, params, session=session)
-    return hourly_response_to_frame(
-        payload,
-        locations=locations,
-        source="live_forecast",
     )
 
 
@@ -585,11 +632,17 @@ def read_weather_frame(input_path):
 
 def build_output_path(source, start_date=None, end_date=None):
     if source == "live_forecast":
-        filename = f"gb_live_forecast_{date.today().isoformat()}.parquet"
+        filename = f"gb_live_forecast_{pd.Timestamp.now(tz='UTC'):%Y-%m-%dT%H%M}Z.parquet"
     else:
         filename = f"gb_{source}_{start_date}_{end_date}.parquet"
 
     return RAW_WEATHER_DIRECTORY / source / filename
+
+
+def previous_runs_chunk_directory(model=None):
+    """Chunk folder for previous-runs data; one folder per pinned model."""
+    name = f"chunks_{model}" if model else "chunks"
+    return RAW_WEATHER_DIRECTORY / "previous_runs" / name
 
 
 def build_chunk_output_path(source, start_date, end_date):
@@ -623,26 +676,29 @@ def download_historical_weather(
     return output_path
 
 
-def download_historical_forecast(
+def download_previous_runs(
     start_date,
     end_date,
+    lead_days=DEFAULT_PREVIOUS_RUNS_LEAD_DAYS,
     session=None,
     sleep_seconds=DEFAULT_CHUNK_DELAY_SECONDS,
-    chunk_frequency="month",
 ):
     session = session or create_request_session(expire_after=None)
-    dataframe = fetch_chunked_historical_forecast(
+    dataframe = fetch_chunked_previous_runs(
         start_date=start_date,
         end_date=end_date,
+        lead_days=lead_days,
         session=session,
-        chunk_cache_directory=RAW_WEATHER_DIRECTORY / "historical_forecast" / "chunks",
+        chunk_cache_directory=RAW_WEATHER_DIRECTORY / "previous_runs" / "chunks",
         sleep_seconds=sleep_seconds,
-        chunk_frequency=chunk_frequency,
     )
-    validate_weather_frame(dataframe)
+    validate_weather_frame(
+        dataframe,
+        expected_hourly=previous_runs_columns(lead_days=lead_days),
+    )
 
     output_path = build_output_path(
-        "historical_forecast",
+        "previous_runs",
         start_date=start_date,
         end_date=end_date,
     )
@@ -651,9 +707,17 @@ def download_historical_forecast(
     return output_path
 
 
-def download_live_forecast(forecast_days=7, session=None):
-    session = session or create_request_session(expire_after=3600)
-    dataframe = fetch_live_forecast(forecast_days=forecast_days, session=session)
+def download_live_forecast(forecast_days=7, session=None, models=PINNED_PREVIOUS_RUNS_MODEL):
+    """Save a snapshot of the live forecast, with when it was taken.
+
+    Each run writes its own timestamped file, so the forecasts that were actually
+    available at prediction time can be scored later. Taken at 08:30 on the day
+    before, the target day is about 15-39 hours ahead: fresher than the 48-hour
+    forecast used in validation.
+    """
+    session = session or create_request_session(expire_after=0)
+    dataframe = fetch_live_forecast(forecast_days=forecast_days, session=session, models=models)
+    dataframe["retrieved_at_utc"] = pd.Timestamp.now(tz="UTC")
     validate_weather_frame(dataframe)
 
     output_path = build_output_path("live_forecast")
@@ -681,23 +745,24 @@ def parse_args(argv=None):
         help="Seconds to wait between chunks.",
     )
 
-    historical_forecast = subparsers.add_parser(
-        "historical-forecast",
-        help="Download historical forecast weather.",
+    previous_runs = subparsers.add_parser(
+        "previous-runs",
+        help="Download genuine past forecasts at fixed lead times (1-7 days ahead).",
     )
-    historical_forecast.add_argument("--start-date", required=True)
-    historical_forecast.add_argument("--end-date", required=True)
-    historical_forecast.add_argument(
+    previous_runs.add_argument("--start-date", required=True)
+    previous_runs.add_argument("--end-date", required=True)
+    previous_runs.add_argument(
+        "--lead-days",
+        type=int,
+        nargs="+",
+        default=list(DEFAULT_PREVIOUS_RUNS_LEAD_DAYS),
+        help="Forecast lead times in days, e.g. --lead-days 1 2.",
+    )
+    previous_runs.add_argument(
         "--sleep-seconds",
         type=float,
         default=DEFAULT_CHUNK_DELAY_SECONDS,
         help="Seconds to wait between chunks.",
-    )
-    historical_forecast.add_argument(
-        "--chunk-frequency",
-        choices=("month", "year"),
-        default="month",
-        help="Chunk size for historical forecast downloads. Monthly is safer for large requests.",
     )
 
     live_forecast = subparsers.add_parser(
@@ -719,12 +784,12 @@ def main(argv=None):
             sleep_seconds=args.sleep_seconds,
         )
 
-    if args.command == "historical-forecast":
-        return download_historical_forecast(
+    if args.command == "previous-runs":
+        return download_previous_runs(
             start_date=args.start_date,
             end_date=args.end_date,
+            lead_days=tuple(args.lead_days),
             sleep_seconds=args.sleep_seconds,
-            chunk_frequency=args.chunk_frequency,
         )
 
     if args.command == "live-forecast":

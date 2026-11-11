@@ -185,3 +185,18 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Project artefacts
+/archive/
+.vscode/
+.venv-1
+mlflow.db
+notebooks/mlruns/
+notebooks/archive/
+/reference/
+/mlruns/
+/outputs/predictions/
+# CatBoost training logs
+catboost_info/
+
+
