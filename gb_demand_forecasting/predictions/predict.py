@@ -1,4 +1,5 @@
-"""Forecast national demand for one day (default: tomorrow), using only what is known at 08:30 the day before.
+"""Forecast national demand for one day (default: tomorrow),
+ using only what is known at 08:30 the day before.
 """
 
 import argparse
