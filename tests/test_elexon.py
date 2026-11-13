@@ -1,27 +1,28 @@
 import pandas as pd
 import pytest
 
-from gb_demand_forecasting.data.demand import elexon_demand, load_elexon
+from gb_demand_forecasting.data import download_utils
+from gb_demand_forecasting.data.demand import download_elexon_demand_data, load_elexon_data
 
 
-def test_settlement_grid_has_46_and_50_periods_on_clock_change_days():
-    grid = load_elexon.build_settlement_grid("2026-03-28", "2026-03-30")
-    counts = grid.groupby("settlement_date").size()
+def test_expected_periods_has_46_and_50_periods_on_clock_change_days():
+    expected_periods = load_elexon_data.build_expected_periods("2026-03-28", "2026-03-30")
+    counts = expected_periods.groupby("settlement_date").size()
 
     assert counts[pd.Timestamp("2026-03-28")] == 48
     assert counts[pd.Timestamp("2026-03-29")] == 46
-    assert load_elexon.periods_in_day("2026-10-25") == 50
+    assert load_elexon_data.periods_in_day("2026-10-25") == 50
 
 
-def test_settlement_grid_stops_at_last_published_period_on_final_day():
-    grid = load_elexon.build_settlement_grid("2026-06-01", "2026-06-02", last_period_on_last_day=10)
+def test_expected_periods_stops_at_last_published_period_on_final_day():
+    expected_periods = load_elexon_data.build_expected_periods("2026-06-01", "2026-06-02", last_period_on_last_day=10)
 
-    assert len(grid) == 48 + 10
-    assert grid["settlement_period"].max() == 48
+    assert len(expected_periods) == 48 + 10
+    assert expected_periods["settlement_period"].max() == 48
 
 
 def test_fill_known_gaps_fills_only_recorded_periods_and_flags_them():
-    grid = load_elexon.build_settlement_grid("2022-01-01", "2022-01-01").head(4)
+    expected_periods = load_elexon_data.build_expected_periods("2022-01-01", "2022-01-01").head(4)
     elexon = pd.DataFrame({
         "settlement_date": pd.Timestamp("2022-01-01"),
         "settlement_period": [1, 2],
@@ -33,7 +34,7 @@ def test_fill_known_gaps_fills_only_recorded_periods_and_flags_them():
         "fill_mw": [120.0],
     })
 
-    filled = load_elexon.fill_known_gaps(grid, elexon, gap_fill)
+    filled = load_elexon_data.fill_known_gaps(expected_periods, elexon, gap_fill)
 
     assert filled["demand_mw"].tolist()[:3] == [100.0, 110.0, 120.0]
     assert filled["is_imputed"].tolist() == [False, False, True, False]
@@ -41,7 +42,7 @@ def test_fill_known_gaps_fills_only_recorded_periods_and_flags_them():
 
 
 def test_fill_known_gaps_prefers_elexon_value_when_it_exists():
-    grid = load_elexon.build_settlement_grid("2022-01-01", "2022-01-01").head(1)
+    expected_periods = load_elexon_data.build_expected_periods("2022-01-01", "2022-01-01").head(1)
     elexon = pd.DataFrame({
         "settlement_date": [pd.Timestamp("2022-01-01")],
         "settlement_period": [1],
@@ -49,7 +50,7 @@ def test_fill_known_gaps_prefers_elexon_value_when_it_exists():
     })
     gap_fill = elexon.rename(columns={"demand_mw": "fill_mw"}).assign(fill_mw=999.0)
 
-    filled = load_elexon.fill_known_gaps(grid, elexon, gap_fill)
+    filled = load_elexon_data.fill_known_gaps(expected_periods, elexon, gap_fill)
 
     assert filled["demand_mw"].iloc[0] == 100.0
     assert not filled["is_imputed"].iloc[0]
@@ -72,7 +73,7 @@ def forecast_versions():
 
 
 def test_latest_forecast_before_cutoff_ignores_versions_published_after_cutoff():
-    selected = elexon_demand.latest_forecast_before_cutoff(forecast_versions(), cutoff_time="09:00")
+    selected = download_elexon_demand_data.latest_forecast_before_cutoff(forecast_versions(), cutoff_time="09:00")
 
     assert selected["settlement_period"].tolist() == [1]
     assert selected["forecast_mw"].tolist() == [2000.0]
@@ -80,13 +81,13 @@ def test_latest_forecast_before_cutoff_ignores_versions_published_after_cutoff()
 
 def test_latest_forecast_before_cutoff_uses_uk_local_time_in_summer():
     # 08:00 UK local on 2026-06-09 is 07:00 UTC, so the 07:30 UTC version is too late.
-    selected = elexon_demand.latest_forecast_before_cutoff(forecast_versions(), cutoff_time="08:00")
+    selected = download_elexon_demand_data.latest_forecast_before_cutoff(forecast_versions(), cutoff_time="08:00")
 
     assert selected["forecast_mw"].tolist() == [1000.0]
 
 
-def test_create_monthly_chunks_covers_range_without_overlap():
-    chunks = elexon_demand.create_monthly_chunks("2026-01-15", "2026-03-10")
+def test_get_monthly_date_range_covers_range_without_overlap():
+    chunks = download_utils.get_monthly_date_range("2026-01-15", "2026-03-10")
 
     assert chunks == [
         ("2026-01-15", "2026-01-31"),
@@ -97,4 +98,4 @@ def test_create_monthly_chunks_covers_range_without_overlap():
 
 def test_fetch_day_ahead_forecasts_rejects_reversed_dates():
     with pytest.raises(ValueError, match="start_date"):
-        elexon_demand.fetch_day_ahead_forecasts("2026-02-01", "2026-01-01")
+        download_elexon_demand_data.fetch_day_ahead_forecasts("2026-02-01", "2026-01-01")

@@ -7,11 +7,8 @@ from pathlib import Path
 import holidays
 import pandas as pd
 
-from gb_demand_forecasting.data.demand.elexon_demand import (
-    BENCHMARK_CUTOFF_TIME,
-    PREDICTION_TIME,
-    build_day_ahead_benchmark,
-)
+from gb_demand_forecasting.data.demand.download_elexon_demand_data import build_day_ahead_benchmark
+from gb_demand_forecasting.data.download_utils import BENCHMARK_CUTOFF_TIME, PREDICTION_TIME
 from gb_demand_forecasting.data.weather.api import PINNED_PREVIOUS_RUNS_MODEL
 from gb_demand_forecasting.data.weather.load_weather_previous_runs import DEFAULT_LEAD_DAY
 

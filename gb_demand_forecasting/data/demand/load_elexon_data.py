@@ -1,4 +1,4 @@
-"""Build the processed GB demand series from Elexon INDO, filling Elexon's known gaps."""
+"""Build the processed GB demand series from Elexon INDO and fill missing gaps with NESO ND."""
 
 import glob
 from pathlib import Path
@@ -9,9 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RAW_ELEXON_DIR = PROJECT_ROOT / "data" / "raw" / "elexon" / "national_demand"
 PROCESSED_DATA_DIR = PROJECT_ROOT / "data" / "processed"
 
-# Elexon never published 414 periods on 20 days in 2020-2023. They were filled once from
-# NESO ND plus the local Elexon-NESO offset; reference/elexon_gap_fill.csv records the result.
-GAP_FILL_PATH = PROJECT_ROOT / "reference" / "elexon_gap_fill.csv"
+NESO_DATA_PATH = PROJECT_ROOT / "reference" / "neso_demand_for_elexon_gaps.csv" #fill missing data using NESO ND
 
 KEY = ["settlement_date", "settlement_period"]
 
@@ -29,18 +27,13 @@ def load_elexon_demand():
     df["settlement_date"] = pd.to_datetime(df["settlement_date"])
     return df
 
+def load_missing_demand(path=NESO_DATA_PATH):
+    """Read NESO's published demand for the periods Elexon never published."""
 
-def load_gap_fill(path=GAP_FILL_PATH):
-    """Read the recorded fill values for Elexon's known gaps."""
-    fill = pd.read_csv(path, usecols=["SETTLEMENT_DATE", "SETTLEMENT_PERIOD", "ND"])
-    return fill.rename(
-        columns={
-            "SETTLEMENT_DATE": "settlement_date",
-            "SETTLEMENT_PERIOD": "settlement_period",
-            "ND": "fill_mw",
-        }
-    ).assign(settlement_date=lambda x: pd.to_datetime(x["settlement_date"]))
-
+    fill = pd.read_csv(path, usecols=["settlement_date", "settlement_period", "neso_nd_mw"])
+    return fill.rename(columns={
+        "neso_nd_mw": "fill_mw",
+    }).assign(settlement_date=lambda x: pd.to_datetime(x["settlement_date"]))
 
 def periods_in_day(day):
     """Number of half-hour settlement periods on a UK day (46, 48 or 50 on clock changes)."""
@@ -49,7 +42,7 @@ def periods_in_day(day):
     return int((end - start).total_seconds() // 1800)
 
 
-def build_settlement_grid(first_day, last_day, last_period_on_last_day=None):
+def build_expected_periods(first_day, last_day, last_period_on_last_day=None):
     """Every settlement period that should exist between two dates.
 
     The final day stops at last_period_on_last_day, so periods Elexon has not
@@ -68,9 +61,10 @@ def build_settlement_grid(first_day, last_day, last_period_on_last_day=None):
     return pd.DataFrame(rows, columns=KEY)
 
 
-def fill_known_gaps(grid, elexon, gap_fill):
+
+def fill_known_gaps(expected_periods, elexon, gap_fill):
     """Fill the recorded gaps; any other missing period is left empty and reported."""
-    df = grid.merge(elexon[[*KEY, "demand_mw"]], on=KEY, how="left").merge(
+    df = expected_periods.merge(elexon[[*KEY, "demand_mw"]], on=KEY, how="left").merge(
         gap_fill, on=KEY, how="left"
     )
     fill_rows = df["demand_mw"].isna() & df["fill_mw"].notna()
@@ -83,22 +77,22 @@ def run_elexon_pipeline(save=True):
     """Build the complete half-hourly demand series from Elexon."""
     elexon = load_elexon_demand()
     latest = elexon.sort_values("start_time_utc").iloc[-1]
-    grid = build_settlement_grid(
+    expected_periods = build_expected_periods(
         elexon["settlement_date"].min(),
         latest["settlement_date"],
         last_period_on_last_day=int(latest["settlement_period"]),
     )
 
-    outside_grid = len(
-        elexon.merge(grid, on=KEY, how="left", indicator=True).query("_merge == 'left_only'")
+    n_unexpected_periods = len(
+        elexon.merge(expected_periods, on=KEY, how="left", indicator=True).query("_merge == 'left_only'")
     )
 
-    if outside_grid:
+    if n_unexpected_periods:
         raise ValueError(
-            f"{outside_grid} Elexon periods fall outside the expected settlement grid."
+            f"{n_unexpected_periods} Elexon periods fall outside the expected settlement periods."
         )
 
-    df = fill_known_gaps(grid, elexon, load_gap_fill())
+    df = fill_known_gaps(expected_periods, elexon, load_missing_demand())
 
     if df.duplicated(KEY).any():
         raise ValueError("Duplicate settlement periods in the demand series.")
@@ -111,7 +105,7 @@ def run_elexon_pipeline(save=True):
             f"gap-fill reference (dates: {sorted(still_missing.dt.strftime('%Y-%m-%d').unique())[:10]})."
         )
 
-    # Same names as the old NESO file, so the downstream notebooks keep working.
+    #rename columns to match the rest of the pipeline and save.
     df = df.rename(
         columns={
             "settlement_date": "SETTLEMENT_DATE",

@@ -1,23 +1,15 @@
-"""Download and build all data up to a chosen end date.
+"""
+Download and prepare the datasets used for GB electricity demand forecasting.
+
+The pipeline downloads Elexon demand observations, NESO forecasts,
+historical weather, and archived weather forecasts. It then prepares
+and combines the datasets for model training and evaluation.
 
 Run from the project root:
-
-    python main.py                         # refresh everything up to yesterday and rebuild
-    python main.py --end-date 2026-10-01   # stop at a fixed date
-    python main.py --skip-download         # only rebuild the processed files
-    python main.py --live                  # also save a live weather forecast snapshot
-
-Steps
-1. Elexon national demand (INDO) and every published day-ahead forecast version (NDF),
-   one file per month. The month containing the end date is always downloaded again.
-2. Open-Meteo actual weather (ERA5), yearly chunks. ERA5 runs about 6 days behind, so the
-   latest days are empty and are dropped when the dataset is built.
-3. Open-Meteo 48-hour-ahead forecasts (previous runs, one pinned model), monthly chunks.
-   Chunks already on disk are reused.
-4. NESO embedded wind and solar forecast: for each half-hour, the newest version issued by
-   08:30 UK on the day before (selected on NESO's query API; one small file per month).
-5. Rebuild data/processed/: demand, weather, forecast weather, embedded forecast, and the
-   merged dataset (data/processed/gb_demand_merged.parquet) that the notebooks start from.
+    python main.py
+    python main.py --end-date 2026-10-01
+    python main.py --skip-download
+    python main.py --live
 """
 
 import argparse
@@ -27,39 +19,42 @@ from pathlib import Path
 import pandas as pd
 
 from gb_demand_forecasting.data.build_dataset import build_dataset
-from gb_demand_forecasting.data.demand import elexon_demand
-from gb_demand_forecasting.data.demand.load_elexon import run_elexon_pipeline
+from gb_demand_forecasting.data.demand import download_elexon_demand_data
+from gb_demand_forecasting.data.demand.load_elexon_data import run_elexon_pipeline
 from gb_demand_forecasting.data.embedded_forecast import (
     build_embedded_forecast_file,
     download_embedded_forecasts,
 )
 from gb_demand_forecasting.data.weather.api import (
     PINNED_PREVIOUS_RUNS_MODEL,
-    build_chunk_output_path,
-    create_request_session,
+    get_chunk_file_path,
+    create_cached_session,
     download_live_forecast,
-    fetch_chunked_historical_weather,
-    fetch_chunked_previous_runs,
-    previous_runs_chunk_directory,
+    fetch_historical_weather_in_chunks,
+    fetch_previous_runs_in_chunks,
+    get_previous_runs_chunk_directory,
 )
 from gb_demand_forecasting.data.weather.load_historical_weather import (
-    run_historical_weather_pipeline,
+    prepare_historical_weather,
 )
 from gb_demand_forecasting.data.weather.load_weather_previous_runs import (
-    run_previous_runs_pipeline,
+    prepare_previous_run_weather,
 )
 
 DEMAND_START_DATE = "2020-01-01"
 WEATHER_START_DATE = "2020-01-01"
-# 48-hour-ahead forecasts, one pinned model, from 2024-07-01. Jul-Dec 2024 is
-# bias-correction history only (training stays on actual weather).
+
+# Archived 48-hour-ahead weather forecasts are available from July 2024.
+# July–December 2024 provides history for weather bias correction.
+# The model is trained using observed weather.
 PREVIOUS_RUNS_START_DATE = "2024-07-01"
+
 PREVIOUS_RUNS_LEAD_DAYS = (2,)
 PREVIOUS_RUNS_SLEEP_SECONDS = 10
 
 
 def chunk_directory(source):
-    return build_chunk_output_path(source, "start", "end").parent
+    return get_chunk_file_path(source, "start", "end").parent
 
 
 def prune_superseded_chunks(directory):
@@ -81,8 +76,8 @@ def prune_superseded_chunks(directory):
 def download_demand(end_date):
     end = end_date.strftime("%Y-%m-%d")
     print(f"\n=== Elexon national demand and day-ahead forecasts to {end} ===")
-    elexon_demand.download_national_demand(DEMAND_START_DATE, end)
-    elexon_demand.download_day_ahead_forecasts(DEMAND_START_DATE, end)
+    download_elexon_demand_data.download_national_demand(DEMAND_START_DATE, end)
+    download_elexon_demand_data.download_day_ahead_forecasts(DEMAND_START_DATE, end)
 
 
 def download_embedded(end_date):
@@ -94,10 +89,10 @@ def download_embedded(end_date):
 def download_weather(end_date):
     end = end_date.strftime("%Y-%m-%d")
     print(f"\n=== Open-Meteo actual weather to {end} ===")
-    fetch_chunked_historical_weather(
+    fetch_historical_weather_in_chunks(
         WEATHER_START_DATE,
         end,
-        session=create_request_session(expire_after=None),
+        session=create_cached_session(expire_after=None),
         chunk_cache_directory=chunk_directory("historical_weather"),
     )
     prune_superseded_chunks(chunk_directory("historical_weather"))
@@ -106,12 +101,12 @@ def download_weather(end_date):
 def download_previous_runs(end_date):
     end = end_date.strftime("%Y-%m-%d")
     print(f"\n=== Open-Meteo 48h-ahead forecasts ({PINNED_PREVIOUS_RUNS_MODEL}) to {end} ===")
-    directory = previous_runs_chunk_directory(PINNED_PREVIOUS_RUNS_MODEL)
-    fetch_chunked_previous_runs(
+    directory = get_previous_runs_chunk_directory(PINNED_PREVIOUS_RUNS_MODEL)
+    fetch_previous_runs_in_chunks(
         PREVIOUS_RUNS_START_DATE,
         end,
         lead_days=PREVIOUS_RUNS_LEAD_DAYS,
-        session=create_request_session(expire_after=None),
+        session=create_cached_session(expire_after=None),
         chunk_cache_directory=directory,
         sleep_seconds=PREVIOUS_RUNS_SLEEP_SECONDS,
         models=PINNED_PREVIOUS_RUNS_MODEL,
@@ -122,8 +117,8 @@ def download_previous_runs(end_date):
 def process(end_date):
     print("\n=== Processing ===")
     run_elexon_pipeline()
-    run_historical_weather_pipeline()
-    run_previous_runs_pipeline(lead_day=PREVIOUS_RUNS_LEAD_DAYS[0])
+    prepare_historical_weather()
+    prepare_previous_run_weather(lead_day=PREVIOUS_RUNS_LEAD_DAYS[0])
     build_embedded_forecast_file()
     build_dataset(end_date=end_date)
 

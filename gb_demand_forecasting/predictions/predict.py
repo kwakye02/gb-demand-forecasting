@@ -16,7 +16,11 @@ from gb_demand_forecasting.data import build_dataset
 from gb_demand_forecasting.data.embedded_forecast import fetch_embedded_forecast
 from gb_demand_forecasting.data.weather.api import PINNED_PREVIOUS_RUNS_MODEL, fetch_previous_runs
 from gb_demand_forecasting.data.weather.load_weather_previous_runs import (
-    DEFAULT_LEAD_DAY, WEATHER_VARIABLES, aggregate_by_time, resample_30min, select_lead_day,
+    DEFAULT_LEAD_DAY,
+    WEATHER_VARIABLES,
+    average_weather_across_locations,
+    expand_hourly_to_half_hourly,
+    select_forecast_lead_day,
 )
 from gb_demand_forecasting.features.lags import build_features
 from gb_demand_forecasting.features.model_inputs import select_model_features
@@ -56,9 +60,9 @@ def get_forecast_weather(target_date):
         lead_days=(DEFAULT_LEAD_DAY,),
         models=PINNED_PREVIOUS_RUNS_MODEL
     )
-    weather = resample_30min(
-        aggregate_by_time(
-            select_lead_day(raw, DEFAULT_LEAD_DAY)
+    weather = expand_hourly_to_half_hourly(
+        average_weather_across_locations(
+            select_forecast_lead_day(raw, DEFAULT_LEAD_DAY)
             )
             )
     return weather.add_prefix("forecast_").rename(columns={"forecast_time": "datetime"})

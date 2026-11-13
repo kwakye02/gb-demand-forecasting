@@ -80,8 +80,8 @@ def test_validate_locations_rejects_duplicate_names():
         api.validate_locations(locations)
 
 
-def test_create_yearly_chunks_splits_date_range_by_calendar_year():
-    chunks = api.create_yearly_chunks("2024-11-01", "2025-02-01")
+def test_get_yearly_date_ranges_splits_date_range_by_calendar_year():
+    chunks = api.get_yearly_date_ranges("2024-11-01", "2025-02-01")
 
     assert chunks == [
         ("2024-11-01", "2024-12-31"),
@@ -89,8 +89,8 @@ def test_create_yearly_chunks_splits_date_range_by_calendar_year():
     ]
 
 
-def test_create_monthly_chunks_splits_date_range_by_calendar_month():
-    chunks = api.create_monthly_chunks("2022-01-15", "2022-03-02")
+def test_get_monthly_date_ranges_splits_date_range_by_calendar_month():
+    chunks = api.get_monthly_date_ranges("2022-01-15", "2022-03-02")
 
     assert chunks == [
         ("2022-01-15", "2022-01-31"),
@@ -119,10 +119,10 @@ def yearly_weather_frame(year):
     )
 
 
-def test_hourly_response_to_frame_adds_location_and_response_metadata():
+def test_parse_hourly_weather_response_adds_location_and_response_metadata():
     locations = (api.WeatherLocation("london", 51.5, -0.1),)
 
-    dataframe = api.hourly_response_to_frame(
+    dataframe = api.parse_hourly_weather_response(
         weather_payload(),
         locations=locations,
         source="historical_weather",
@@ -138,14 +138,14 @@ def test_hourly_response_to_frame_adds_location_and_response_metadata():
     assert str(dataframe["time"].dt.tz) == "UTC"
 
 
-def test_hourly_response_to_frame_rejects_response_location_mismatch():
+def test_parse_hourly_weather_response_rejects_response_location_mismatch():
     locations = (
         api.WeatherLocation("london", 51.5, -0.1),
         api.WeatherLocation("edinburgh", 55.9, -3.2),
     )
 
     with pytest.raises(ValueError, match="does not match"):
-        api.hourly_response_to_frame(
+        api.parse_hourly_weather_response(
             weather_payload(),
             locations=locations,
             source="historical_weather",
@@ -160,7 +160,7 @@ def test_fetch_historical_weather_uses_archive_endpoint_and_era5_model():
         start_date="2025-01-01",
         end_date="2025-01-01",
         locations=locations,
-        hourly=("temperature_2m",),
+        hourly_variables=("temperature_2m",),
         session=session,
     )
 
@@ -181,7 +181,7 @@ def test_fetch_live_forecast_uses_forecast_endpoint_without_current_weather():
     api.fetch_live_forecast(
         forecast_days=3,
         locations=locations,
-        hourly=("temperature_2m",),
+        hourly_variables=("temperature_2m",),
         session=session,
     )
 
@@ -191,7 +191,7 @@ def test_fetch_live_forecast_uses_forecast_endpoint_without_current_weather():
     assert "current" not in call["params"]
 
 
-def test_validate_weather_frame_rejects_duplicate_rows():
+def test_validate_weather_data_rejects_duplicate_rows():
     dataframe = pd.DataFrame(
         {
             "source": ["historical_weather", "historical_weather"],
@@ -205,16 +205,16 @@ def test_validate_weather_frame_rejects_duplicate_rows():
     )
 
     with pytest.raises(ValueError, match="duplicate weather rows"):
-        api.validate_weather_frame(
+        api.validate_weather_data(
             dataframe,
             expected_hourly=("temperature_2m",),
         )
 
 
-def test_validate_weather_frame_accepts_single_variable_string():
+def test_validate_weather_data_accepts_single_variable_string():
     dataframe = yearly_weather_frame(2025)
 
-    result = api.validate_weather_frame(
+    result = api.validate_weather_data(
         dataframe,
         expected_hourly="temperature_2m",
     )
@@ -222,7 +222,7 @@ def test_validate_weather_frame_accepts_single_variable_string():
     assert result is dataframe
 
 
-def test_fetch_chunked_historical_weather_saves_and_reuses_chunks(monkeypatch, tmp_path):
+def test_fetch_historical_weather_in_chunks_saves_and_reuses_chunks(monkeypatch, tmp_path):
     calls = []
     locations = (api.WeatherLocation("london", 51.5, -0.1),)
 
@@ -230,7 +230,7 @@ def test_fetch_chunked_historical_weather_saves_and_reuses_chunks(monkeypatch, t
         start_date,
         end_date,
         locations,
-        hourly,
+        hourly_variables,
         model,
         session,
     ):
@@ -239,11 +239,11 @@ def test_fetch_chunked_historical_weather_saves_and_reuses_chunks(monkeypatch, t
 
     monkeypatch.setattr(api, "fetch_historical_weather", fake_fetch_historical_weather)
 
-    first_result = api.fetch_chunked_historical_weather(
+    first_result = api.fetch_historical_weather_in_chunks(
         start_date="2024-01-01",
         end_date="2025-01-01",
         locations=locations,
-        hourly=("temperature_2m",),
+        hourly_variables=("temperature_2m",),
         chunk_cache_directory=tmp_path,
         sleep_seconds=0,
     )
@@ -258,11 +258,11 @@ def test_fetch_chunked_historical_weather_saves_and_reuses_chunks(monkeypatch, t
 
     calls.clear()
 
-    second_result = api.fetch_chunked_historical_weather(
+    second_result = api.fetch_historical_weather_in_chunks(
         start_date="2024-01-01",
         end_date="2025-01-01",
         locations=locations,
-        hourly=("temperature_2m",),
+        hourly_variables=("temperature_2m",),
         chunk_cache_directory=tmp_path,
         sleep_seconds=0,
     )
@@ -271,8 +271,8 @@ def test_fetch_chunked_historical_weather_saves_and_reuses_chunks(monkeypatch, t
     assert calls == []
 
 
-def test_build_output_path_uses_parquet_suffix():
-    output_path = api.build_output_path(
+def test_get_output_file_path_uses_parquet_suffix():
+    output_path = api.get_output_file_path(
         "historical_weather",
         start_date="2025-01-01",
         end_date="2025-01-31",
@@ -281,9 +281,9 @@ def test_build_output_path_uses_parquet_suffix():
     assert output_path.name == "gb_historical_weather_2025-01-01_2025-01-31.parquet"
 
 
-def test_save_weather_frame_rejects_unknown_suffix(tmp_path):
+def test_save_weather_data_rejects_unknown_suffix(tmp_path):
     with pytest.raises(ValueError, match=".parquet or .csv"):
-        api.save_weather_frame(pd.DataFrame({"x": [1]}), tmp_path / "weather.txt")
+        api.save_weather_data(pd.DataFrame({"x": [1]}), tmp_path / "weather.txt")
 
 
 def test_request_open_meteo_raises_on_api_error():
@@ -341,3 +341,42 @@ def test_request_open_meteo_retries_after_connection_timeout(monkeypatch):
     assert payload == weather_payload()
     assert session.calls == 2
     assert sleeps == [0]
+
+
+def hourly_frame(hours=4, values=None):
+    return pd.DataFrame({
+        "source": "historical_weather",
+        "location_name": "london",
+        "time": pd.date_range("2024-01-01", periods=hours, freq="h", tz="UTC"),
+        "temperature_2m": values if values is not None else [1.0] * hours,
+    })
+
+
+def test_validate_weather_data_rejects_non_hourly_intervals():
+    frame = hourly_frame().drop(index=1)
+
+    with pytest.raises(ValueError, match="non-hourly"):
+        api.validate_weather_data(frame, expected_hourly=("temperature_2m",))
+
+
+def test_validate_weather_data_rejects_a_column_with_no_values():
+    frame = hourly_frame(values=[None] * 4)
+
+    with pytest.raises(ValueError, match="no values"):
+        api.validate_weather_data(frame, expected_hourly=("temperature_2m",))
+
+
+def test_validate_weather_data_reports_some_missing_values(capsys):
+    frame = hourly_frame(values=[1.0, None, 3.0, 4.0])
+
+    api.validate_weather_data(frame, expected_hourly=("temperature_2m",))
+
+    assert "1 missing values" in capsys.readouterr().out
+
+
+def test_cached_chunk_missing_expected_columns_is_downloaded_again(tmp_path):
+    path = tmp_path / "chunk.parquet"
+    hourly_frame().to_parquet(path, index=False)
+
+    assert api.load_valid_cached_chunk(path, ("temperature_2m",)) is not None
+    assert api.load_valid_cached_chunk(path, ("temperature_2m", "wind_speed_10m")) is None

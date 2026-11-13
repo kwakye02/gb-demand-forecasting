@@ -92,11 +92,13 @@ python main.py --skip-download         # only rebuild the processed files
 Things worth knowing:
 
 - **Gaps.** Elexon never published 414 half-hours on 20 days in 2020-2023. They are filled from
-  NESO `ND` plus the local Elexon-NESO offset (`reference/elexon_gap_fill.csv`) and flagged
+  NESO's published `ND` for the same period (`reference/neso_demand_for_elexon_gaps.csv`) and flagged
   `is_imputed`. Nothing is missing from 2024 onwards.
 - **Benchmark timing.** NESO publishes its full-day forecast at about 08:45, after the 08:30
   prediction time, so the benchmark uses the newest version published by 09:00. The cutoffs are
-  `PREDICTION_TIME` and `BENCHMARK_CUTOFF_TIME` in `data/demand/elexon_demand.py`.
+  `PREDICTION_TIME` and `BENCHMARK_CUTOFF_TIME` in `data/download_utils.py`.
+- **Forecast-weather gap.** ECMWF cloud cover is missing from 17 to 22 April 2026 in the
+  Open-Meteo Previous Runs archive. Exclude those dates when cloud cover is used as a feature.
 - **Weather lag.** ERA5 runs about 5 days behind, so training data ends about 5 days before today.
   The live run does not need it: it uses forecast weather and demand up to two days back.
 - **Embedded forecast timing.** NESO re-issues the forecast hourly, and an issue becomes visible
@@ -111,12 +113,17 @@ Data is used under each provider's own terms: Elexon and NESO open data licences
 ```
 main.py                        download, process and build the merged dataset
 gb_demand_forecasting/
-  data/                        Elexon, NESO and Open-Meteo downloaders; build_dataset.py
+  data/
+    demand/                    Elexon downloader and loader (INDO demand, day-ahead benchmark)
+    weather/                   Open-Meteo downloader (api.py) and the two weather loaders
+    embedded_forecast.py       NESO embedded wind and solar forecast
+    download_utils.py          shared download helpers and the 08:30 / 09:00 cutoff times
+    build_dataset.py           merges everything into data/processed/gb_demand_merged.parquet
   features/                    lags.py, weather.py (bias correction), model_inputs.py
   models/                      catboost_ridge_blend.py, train.py (logs and registers in MLflow)
   predictions/                 target_periods.py, predict.py (live day-ahead forecast)
 notebooks/                     01-05: EDA, features, benchmarks, model selection
-reference/                     small tracked reference data (the gap fill)
+reference/                     small tracked reference data (NESO demand for Elexon's gaps)
 tests/                         pytest suite
 ```
 

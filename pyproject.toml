@@ -24,7 +24,6 @@ dependencies = [
     "pyarrow",
     "requests",
     "requests-cache",
-    "retry-requests",
     "scikit-learn",
     "skops",
 ]

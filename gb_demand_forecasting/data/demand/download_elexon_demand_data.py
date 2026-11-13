@@ -5,67 +5,32 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+
+from gb_demand_forecasting.data.download_utils import (
+    BENCHMARK_CUTOFF_TIME,
+    DEFAULT_START_DATE,
+    build_session,
+    download_and_save_monthly_data,
+    read_chunks,
+)
 
 BASE_URL = "https://data.elexon.co.uk/bmrs/api/v1"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RAW_ELEXON_DIRECTORY = PROJECT_ROOT / "data" / "raw" / "elexon"
 
-DEFAULT_START_DATE = "2020-01-01"
-
-# Elexon holds no day-ahead forecast versions before this date (and almost none until
-# July 2021: May 2021 is empty), so earlier months are not requested.
-DAY_AHEAD_FORECAST_FIRST_DATE = "2021-04-01"
-
-# The model predicts at 08:30 UK time on the day before the settlement date.
-PREDICTION_TIME = "08:30"
-
-# NESO publishes its full day-ahead forecast at about 08:45 UK time on the day before
-# (15 minutes after PREDICTION_TIME). 09:00 is the earliest cutoff at which a full-day
-# forecast exists, so the benchmark uses the newest version published by then.
-BENCHMARK_CUTOFF_TIME = "09:00"
+DAY_AHEAD_FORECAST_FIRST_DATE = "2021-04-01"  # First date for which Elexon provides day-ahead forecasts
 
 
-def build_session():
-    """Create a reusable HTTP session with automatic retries."""
-
-    session = requests.Session()
-
-    retries = Retry(
-        total=5,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504, 520, 522, 524],  # 520-524: gateway timeouts
-        allowed_methods=["GET"],
-        respect_retry_after_header=True,
-    )
-
-    session.mount(
-        "https://",
-        HTTPAdapter(max_retries=retries),
-    )
-
-    session.headers.update(
-        {
-            "User-Agent": "gb-demand-forecasting/1.0",
-            "Accept": "application/json",
-        }
-    )
-
-    return session
-
-
-def json_to_df(payload):
+def json_to_df(response_data):
     """Convert an Elexon JSON response into a DataFrame."""
 
-    if isinstance(payload, list):
-        return pd.DataFrame(payload)
+    if isinstance(response_data, list):
+        return pd.DataFrame(response_data)
 
-    if isinstance(payload, dict):
-        if isinstance(payload.get("data"), list):
-            return pd.DataFrame(payload["data"])
+    if isinstance(response_data, dict):
+        if isinstance(response_data.get("data"), list):
+            return pd.DataFrame(response_data["data"])
 
     raise ValueError("Unexpected Elexon API response format")
 
@@ -86,11 +51,7 @@ def fetch_df(session, endpoint, params=None):
     return json_to_df(response.json())
 
 
-def fetch_national_demand(
-    start_date,
-    end_date,
-    as_of=None,
-):
+def fetch_national_demand(start_date,end_date,as_of=None):
     """
     Download Elexon Initial National Demand Outturn (INDO).
 
@@ -132,25 +93,18 @@ def fetch_national_demand(
     parts = []
 
     with build_session() as session:
-        # Download in small chunks rather than one large request.
+        # Downloads the data in small chunks rather than one large request.
         chunk_start = start
 
         while chunk_start <= end:
-            chunk_end = min(
-                chunk_start + timedelta(days=6),
-                end,
-            )
+            chunk_end = min(chunk_start + timedelta(days=6),end)
 
             params = {
                 "settlementDateFrom": chunk_start.isoformat(),
                 "settlementDateTo": chunk_end.isoformat(),
             }
 
-            df = fetch_df(
-                session,
-                "/demand/outturn/stream",
-                params=params,
-            )
+            df = fetch_df(session,"/demand/outturn/stream", params=params)
 
             if not df.empty:
                 parts.append(df)
@@ -188,22 +142,12 @@ def fetch_national_demand(
     # Convert data types.
     df["settlement_date"] = pd.to_datetime(df["settlement_date"]).dt.date
 
-    df["settlement_period"] = pd.to_numeric(
-        df["settlement_period"],
-        errors="raise",
-    ).astype(int)
+    df["settlement_period"] = pd.to_numeric(df["settlement_period"],errors="raise",).astype(int)
 
     for column in ["start_time_utc", "publish_time_utc"]:
-        df[column] = pd.to_datetime(
-            df[column],
-            utc=True,
-            errors="coerce",
-        )
+        df[column] = pd.to_datetime(df[column],utc=True,errors="coerce")
 
-    df["demand_mw"] = pd.to_numeric(
-        df["demand_mw"],
-        errors="coerce",
-    )
+    df["demand_mw"] = pd.to_numeric(df["demand_mw"],errors="coerce")
 
     # Reject records with an invalid settlement identity.
     if df["start_time_utc"].isna().any():
@@ -314,10 +258,7 @@ def fetch_day_ahead_forecasts(start_date, end_date):
             errors="coerce",
         )
 
-    df["forecast_mw"] = pd.to_numeric(
-        df["forecast_mw"],
-        errors="coerce",
-    )
+    df["forecast_mw"] = pd.to_numeric(df["forecast_mw"],errors="coerce")
 
     if df[["start_time_utc", "publish_time_utc"]].isna().any().any():
         raise ValueError("Invalid forecast timestamps")
@@ -344,8 +285,8 @@ def latest_forecast_before_cutoff(
     Keep, for each settlement period, the newest forecast published by the cutoff.
 
     The cutoff is cutoff_time local time, cutoff_days_before days before the
-    settlement date (default: 09:00 the day before). Forecasts published after
-    it are ignored, so nothing from after the prediction time leaks in.
+    settlement date (default: 09:00 the day before).
+    Forecasts published after the benchmark cutoff are excluded.
     """
 
     forecasts = forecasts.copy()
@@ -375,85 +316,6 @@ def latest_forecast_before_cutoff(
     )
 
 
-def create_monthly_chunks(start_date, end_date):
-    """Split a date range into (month_start, month_end) ISO date pairs."""
-
-    start = pd.Timestamp(start_date)
-    end = pd.Timestamp(end_date)
-
-    if start > end:
-        raise ValueError("start_date must not be after end_date.")
-
-    chunks = []
-
-    for month in pd.period_range(start, end, freq="M"):
-        chunks.append(
-            (
-                max(month.start_time.normalize(), start).strftime("%Y-%m-%d"),
-                min(month.end_time.normalize(), end).strftime("%Y-%m-%d"),
-            )
-        )
-
-    return chunks
-
-
-def read_chunks(chunk_directory):
-    """Concatenate every saved monthly chunk in a directory."""
-
-    files = sorted(Path(chunk_directory).glob("*.parquet"))
-
-    if not files:
-        raise FileNotFoundError(f"No chunks found in {chunk_directory}")
-
-    return pd.concat(
-        [pd.read_parquet(file) for file in files],
-        ignore_index=True,
-    )
-
-
-def download_monthly_chunks(
-    name, fetch, start_date, end_date, output_directory, prefix="gb_elexon"
-):
-    """
-    Save one parquet file per calendar month, reusing complete months already on disk.
-
-    The month containing end_date is always downloaded again, because it is
-    still growing.
-    """
-
-    chunk_directory = Path(output_directory) / name / "chunks"
-    chunk_directory.mkdir(parents=True, exist_ok=True)
-    end = pd.Timestamp(end_date)
-
-    for chunk_start, chunk_end in create_monthly_chunks(start_date, end_date):
-        month = chunk_start[:7]
-        chunk_path = chunk_directory / f"{prefix}_{name}_{month}.parquet"
-        month_is_complete = (
-            pd.Timestamp(chunk_start).day == 1
-            and pd.Timestamp(chunk_end) == pd.Timestamp(chunk_end) + pd.offsets.MonthEnd(0)
-            and pd.Timestamp(chunk_end) < end
-        )
-
-        if chunk_path.exists() and month_is_complete:
-            print(f"Using cached chunk {chunk_path.name}")
-            continue
-
-        try:
-            chunk = fetch(chunk_start, chunk_end)
-        except ValueError as error:
-            print(f"{month}: nothing downloaded ({error})")
-            continue
-
-        if chunk.empty:
-            print(f"{month}: no data published")
-            continue
-
-        chunk.to_parquet(chunk_path, index=False)
-        print(f"Saved {len(chunk):,} rows to {chunk_path.name}")
-
-    return chunk_directory
-
-
 def download_national_demand(
     start_date=DEFAULT_START_DATE,
     end_date=None,
@@ -462,7 +324,7 @@ def download_national_demand(
     """Download INDO to monthly chunks and a combined parquet file."""
 
     end_date = end_date or (date.today() - timedelta(days=1)).isoformat()
-    chunk_directory = download_monthly_chunks(
+    chunk_directory = download_and_save_monthly_data(
         "national_demand", fetch_national_demand, start_date, end_date, output_directory
     )
 
@@ -501,7 +363,7 @@ def download_day_ahead_forecasts(
 
     end_date = end_date or (date.today() - timedelta(days=1)).isoformat()
     start_date = max(str(start_date), DAY_AHEAD_FORECAST_FIRST_DATE)
-    return download_monthly_chunks(
+    return download_and_save_monthly_data(
         "day_ahead_forecast", fetch_day_ahead_forecasts, start_date, end_date, output_directory
     )
 
@@ -539,9 +401,7 @@ def parse_args(argv=None):
         description="Download Elexon national demand and day-ahead demand forecasts."
     )
     parser.add_argument("--start-date", default=DEFAULT_START_DATE)
-    parser.add_argument(
-        "--end-date",
-        default=None,
+    parser.add_argument( "--end-date",default=None,
         help="Last date to download (YYYY-MM-DD). Defaults to yesterday.",
     )
     return parser.parse_args(argv)

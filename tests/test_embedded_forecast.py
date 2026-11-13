@@ -128,7 +128,7 @@ def test_fetch_returns_an_empty_frame_when_nothing_was_issued():
         "2026-05-01", "2026-05-31", session=session, resource_ids=RESOURCE_IDS
     )
 
-    assert result.empty and list(result.columns) == embedded_forecast.OUTPUT_COLUMNS
+    assert result.empty and list(result.columns) == embedded_forecast.EMBEDDED_FORECAST_COLUMNS
 
 
 def test_fetch_rejects_ranges_spanning_months_or_reversed_dates():
