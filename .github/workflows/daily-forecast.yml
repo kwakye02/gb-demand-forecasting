@@ -1,0 +1,90 @@
+name: daily-forecast
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: pipeline-state
+  cancel-in-progress: false
+
+env:
+  S3_BUCKET: gb-demand-forecasting-gk
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Restore saved data and results from S3
+        run: |
+          mkdir -p data/raw .cache outputs/predictions
+          aws s3 sync "s3://$S3_BUCKET/raw/" data/raw/ --only-show-errors
+          for name in forecasts scores; do
+            if aws s3 ls "s3://$S3_BUCKET/$name/$name.parquet" > /dev/null 2>&1; then
+              aws s3 cp "s3://$S3_BUCKET/$name/$name.parquet" "outputs/predictions/$name.parquet"
+            fi
+          done
+
+      - name: Download new data and rebuild
+        run: python main.py
+
+      - name: Validate processed dataset
+        run: |
+          python -c "
+          import pandas as pd
+          data = pd.read_parquet('data/processed/gb_demand_merged.parquet')
+          assert not data.empty, 'Merged dataset is empty'
+          age = pd.Timestamp.now(tz='UTC') - data.index.max()
+          assert age <= pd.Timedelta(days=10), f'Merged dataset ends {age} ago'
+          print('Validated:', data.shape, 'ends', data.index.max())
+          "
+
+      - name: Save raw data to S3
+        run: aws s3 sync data/raw/ "s3://$S3_BUCKET/raw/" --delete --only-show-errors
+
+      - name: Save processed datasets to S3
+        run: aws s3 sync data/processed/ "s3://$S3_BUCKET/processed/" --only-show-errors
+
+      - name: Score forecasts against actual demand
+        run: |
+          if [ -f outputs/predictions/forecasts.parquet ]; then
+            python -m gb_demand_forecasting.predictions.score
+          else
+            echo "No saved forecasts yet, nothing to score."
+          fi
+
+      - name: Save scores to S3
+        run: |
+          if [ -f outputs/predictions/scores.parquet ]; then
+            aws s3 cp outputs/predictions/scores.parquet "s3://$S3_BUCKET/scores/scores.parquet"
+          fi
+
+      - name: Forecast tomorrow
+        run: python -m gb_demand_forecasting.predictions.predict
+
+      - name: Save forecasts to S3
+        run: aws s3 cp outputs/predictions/forecasts.parquet "s3://$S3_BUCKET/forecasts/forecasts.parquet"
