@@ -39,10 +39,10 @@ def test_score_predictions_errors_are_forecast_minus_actual():
     assert results["Benchmark_Error_mw"].tolist() == [-10.0, 10.0, 0.0]
 
 
-def test_summarize_predictions_reports_mae_and_bias_for_model_and_benchmark():
+def test_summarize_daily_scores_reports_mae_and_bias_for_model_and_benchmark():
     results = score.score_predictions(make_forecast(), make_actual(), make_benchmark(), DAY)
 
-    row = score.summarize_predictions(results).iloc[0]
+    row = score.summarize_daily_scores(results).iloc[0]
 
     assert row["Number_of_Periods"] == 3
     assert row["MAE"] == pytest.approx(16.7, abs=0.05)

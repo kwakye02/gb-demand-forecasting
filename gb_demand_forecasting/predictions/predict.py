@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 import pandas as pd
+import json
 
 import mlflow
 import mlflow.artifacts
@@ -37,19 +38,27 @@ MAX_EMBEDDED_AGE_HOURS = 8   # a guess: tune it after watching real issue times
 MLFLOW_DB = PROJECT_ROOT / "mlflow.db"
 MODEL_NAME = "gb_demand_blend"
 
+CHAMPION_DIR = PROJECT_ROOT / "models" / "champion"
+CHAMPION_MODEL_PATH = CHAMPION_DIR / "model"
+CHAMPION_INFO_PATH = CHAMPION_DIR / "model_info.json"
 
 
-def load_model(model_name=MODEL_NAME, alias= 'champion', mlflow_db=MLFLOW_DB):
-    """Loads the champion model from mlflow"""
+
+def load_model(model_name=MODEL_NAME, alias="champion", mlflow_db=MLFLOW_DB, champion_dir=CHAMPION_DIR):
+    """Load the champion model: from models/champion if it exists, else from the MLflow registry.
+
+    Returns (model, info, version) where version is a plain integer.
+    """
+    if champion_dir.exists():
+        model = mlflow.sklearn.load_model(str(champion_dir / "model"))
+        info = json.loads((champion_dir / "model_info.json").read_text())
+        return model, info, int(info["model_version"])
+
     mlflow.set_tracking_uri(f"sqlite:///{mlflow_db.as_posix()}")
-    client = MlflowClient()
-    version = client.get_model_version_by_alias(name=model_name, alias=alias)
+    version = MlflowClient().get_model_version_by_alias(name=model_name, alias=alias)
     model = mlflow.sklearn.load_model(f"models:/{model_name}/{version.version}")
     info = mlflow.artifacts.load_dict(f"runs:/{version.run_id}/model_info.json")
-    return model, info, version
-
-
-
+    return model, info, int(version.version)
 
 def get_forecast_weather(target_date):
     """Get forecast weather for the target day in 30-minute intervals"""
@@ -135,7 +144,7 @@ def forecast_national_demand(target_date, historical_data=None, check_fresh=True
         "issued_at_utc": now,
         "embedded_forecast_issued_utc": rows["emb_fc_issued_utc"].max(),
         "model_trained_to": info["training_last_date"],
-        "model_version": int(newest.version),
+        "model_version": newest
     })
 
 
