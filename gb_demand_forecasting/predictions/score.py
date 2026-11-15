@@ -10,17 +10,23 @@ from gb_demand_forecasting.data.demand.download_elexon_demand_data import build_
 SCORES_PATH = FORECASTS_PATH.parent / "scores.parquet"
 
 def score_predictions(forecast,actual, benchmark, target_date):
-    forecast = forecast[forecast['target_date'] == target_date].copy()
-    actual['SETTLEMENT_DATE'] = pd.to_datetime(actual['SETTLEMENT_DATE'])
-    actual = actual[actual['SETTLEMENT_DATE'] == target_date].copy()
 
+    target_date = pd.Timestamp(target_date).normalize()
+
+    forecast['target_date'] = pd.to_datetime(forecast['target_date']).dt.normalize()
+    actual['SETTLEMENT_DATE'] = pd.to_datetime(actual['SETTLEMENT_DATE']).dt.normalize()
+    benchmark['settlement_date'] = pd.to_datetime(benchmark['settlement_date']).dt.normalize()
+    
+    forecast = forecast[forecast['target_date'] == target_date].copy()
+    actual = actual[actual['SETTLEMENT_DATE'] == target_date].copy()
     benchmark = benchmark[benchmark['settlement_date'] == target_date].copy()
 
     combined = forecast.merge(actual, left_on=['settlement_period','target_date'],
-                            right_on=['SETTLEMENT_PERIOD','SETTLEMENT_DATE'], how='inner')
-
+                            right_on=['SETTLEMENT_PERIOD','SETTLEMENT_DATE'], how='inner',
+                            validate='one_to_one')
     combined = combined.merge(benchmark, left_on=['settlement_period', 'target_date'],
-                              right_on=['settlement_period', 'settlement_date'], how='inner')
+                              right_on=['settlement_period', 'settlement_date'], how='inner',
+                              validate='one_to_one')
     
     if len(combined) != len(forecast):
         raise ValueError(f"Forecast and actual data do not match for {target_date}. Forecast has {len(forecast)} rows, actual has {len(actual)} rows, combined has {len(combined)} rows.")
@@ -30,19 +36,21 @@ def score_predictions(forecast,actual, benchmark, target_date):
 
     return combined
 
-def summarize_predictions(results):
+def summarize_daily_scores(results):
+    if results.empty:
+        raise ValueError("Cannot summarize an empty forecast result.")
     mae = np.mean(np.abs(results['Error_mw']))
     Date = results['target_date'].iloc[0]
     model_version = results['model_version'].iloc[0]
-    number_of_periods = len(results)
+    period_count = len(results)
     bias = np.mean(results['Error_mw'])
-    benchmark_bias = np.mean(results['Benchmark_Error_mw'])
+    elexon_bias = np.mean(results['Benchmark_Error_mw'])
     elexon_mae = np.mean(np.abs(results['Benchmark_Error_mw']))
     return pd.DataFrame({'Date':[Date],'Model_Version':[model_version],
-                         'Number_of_Periods':[number_of_periods],
+                         'Number_of_Periods':[period_count],
                          'MAE':[round(mae, 1)],'Bias':[round(bias, 1)],
                          'Elexon_MAE':[round(elexon_mae, 1)],
-                         'Elexon_Bias':[round(benchmark_bias, 1)]})
+                         'Elexon_Bias':[round(elexon_bias, 1)]})
 
 
 def score_new_days(forecasts, actual, benchmark, scores_path=SCORES_PATH):
@@ -57,7 +65,7 @@ def score_new_days(forecasts, actual, benchmark, scores_path=SCORES_PATH):
         except ValueError as error:
             print(f"Skipping {day.date()}: {error}")
             continue
-        new_rows.append(summarize_predictions(results))
+        new_rows.append(summarize_daily_scores(results))
 
     if new_rows:
         scores = pd.concat([scores, *new_rows], ignore_index=True).sort_values("Date")
