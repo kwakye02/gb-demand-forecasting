@@ -1,28 +1,26 @@
 # GB Electricity Demand Forecasting
 
-A day-ahead forecast of Great Britain's national electricity demand (half-hourly, 48 periods a
-day). Benchmarked against the forecast that NESO/Elexon publish for the same day.
+A day-ahead forecast of Great Britain's national electricity demand, for each half-hour of the day,
+compared with the forecast NESO/Elexon publish for the same day.
 
-Every forecast is made at **08:30 UK time on the day before**. Nothing published after that
-moment is used, in training or in the live run.
+Every forecast is made at **08:30 UK time on the day before**. Nothing published after that is
+used, in training or in the live run.
 
 ## Results
 
-Mean absolute error on National Demand (`ND`), in MW, over all half-hours of each year.
-The model is trained only on days before the year it is scored on.
+Mean absolute error on National Demand (`ND`), in MW, over every half-hour of the year. The model
+is trained only on days before the year it is scored on.
 
 | Year | Seasonal naive | This model | NESO/Elexon day-ahead |
 |---|---|---|---|
 | 2025 | 2,177 | **758** | 711 |
 | 2026 (to early Nov) | 2,111 | **825** | 789 |
 
-- The model cuts the error of a seasonal-naive baseline by roughly 60-65%.
-- It does **not** beat the official forecast: it is about 5-7% worse. The benchmark is the newest
-  NESO forecast published by 09:00, so it sees 30 minutes more information than the model, and NESO
-  has data from the whole system. A model within a few percent of it, from public data only, is
-  the realistic goal.
-- Weather at forecast time is the 48-hour-ahead ECMWF forecast (not the actual weather), with a
-  rolling bias correction, so the scores include forecast-weather error.
+- The model cuts the seasonal-naive error by about 60-65%.
+- NESO's forecast is still 5-7% better. It is the newest version published by 09:00, half an hour
+  after the model's cutoff, and NESO sees data from the whole system.
+- The weather in these scores is the 48-hour-ahead ECMWF forecast, not the weather that actually
+  happened, so weather-forecast error is part of the result.
 
 ## How it works
 
@@ -34,24 +32,30 @@ NESO embedded ─┤                                                            
 Elexon NDF ────┘  (benchmark only)                                       live day-ahead forecast ◄┘
 ```
 
-**Features** (all computable at 08:30 on D-1, which is the only rule):
+**Features.** Everything is known by 08:30 on the day before:
 
-- Demand lags of at least two days: same time 2 and 7 days earlier, weekly lags out to 42 days,
-  and a six-week average that leaves out bank-holiday weeks.
-- NESO's embedded wind and solar forecast (newest version issued by 08:30), and how it differs
+- Demand lags of at least two days: the same time 2 and 7 days earlier, weekly lags out to 42 days,
+  and a six-week average that skips bank-holiday weeks.
+- NESO's embedded wind and solar forecast (the newest version issued by 08:30), and how it differs
   from the same time a week earlier and from the six-week baseline.
-- Forecast weather for the target day (temperature, wind, cloud, radiation, humidity), corrected
-  for its recent bias using only data that was already known (60-day window, 7-day delay).
+- Forecast weather for the target day (temperature, wind, cloud, radiation, humidity), corrected for
+  its recent bias using only data already known (60-day window, 7-day delay).
 - Calendar: day of week, month, bank holidays, the day before a holiday, settlement period.
 
-**Model.** A blend of 75% CatBoost and 25% Ridge regression (the Ridge fitted on the deviation from
-the six-week baseline). Recent days count more: a day's training weight halves every year. It is
-trained on actual weather and predicts with corrected forecast weather.
+**Model.** A blend of 75% CatBoost and 25% Ridge regression, with the Ridge fitted on the deviation
+from the six-week baseline. Recent days count more: a day's training weight halves every year. The
+model is trained on actual weather and predicts with corrected forecast weather.
 
-**Live forecast.** `predict.py` rebuilds the same feature matrix from live inputs and loads the
-`champion` model from the MLflow registry. A replay test checks that the live-built matrix equals
-the training-path matrix on a set of past days, including both clock changes (46- and 50-period
-days).
+**Live forecast.** `predict.py` builds the same feature matrix from live inputs and loads the
+champion model. It reads `models/champion/` (model files plus `model_info.json`, committed to the
+repo) if that folder exists, so it runs on a machine with no MLflow registry, and falls back to the
+registry's `champion` alias otherwise. A replay test checks that the live-built matrix equals the
+training-path matrix on past days, including both clock changes (46- and 50-period days).
+
+**Live scoring.** Once a day is complete, `score.py` compares each saved forecast with actual demand
+and with the NESO benchmark. It writes one row per day to `outputs/predictions/scores.parquet`: MAE
+and bias for the model and for NESO, plus the model version. A day is scored once, and a day with
+missing periods is skipped.
 
 ## Quick start
 
@@ -66,11 +70,13 @@ python main.py                                  # download and build data/proces
 python -m gb_demand_forecasting.models.train    # fit the model and register it in MLflow
 python -m gb_demand_forecasting.predictions.predict            # forecast tomorrow
 python -m gb_demand_forecasting.predictions.predict --date 2026-11-12 --no-save
+python -m gb_demand_forecasting.predictions.score              # score forecasts whose day is complete
 ```
 
-Forecasts are appended to `outputs/predictions/forecasts.parquet` (one row per half-hour, with the
-embedded-forecast issue time and model version). The model registry is a local SQLite file
-(`mlflow.db`); after training, set the `champion` alias on the version you want to serve.
+Forecasts are appended to `outputs/predictions/forecasts.parquet`, one row per half-hour, with the
+embedded-forecast issue time and the model version. The model registry is a local SQLite file
+(`mlflow.db`). After training, set the `champion` alias on the version you want to serve, then copy
+that version's model and `model_info.json` into `models/champion/` so the cloud run uses it.
 
 Other `main.py` options:
 
@@ -78,6 +84,25 @@ Other `main.py` options:
 python main.py --end-date 2026-10-01   # stop at a fixed date
 python main.py --skip-download         # only rebuild the processed files
 ```
+
+## Daily run in the cloud
+
+Two GitHub Actions workflows run the pipeline on a clean machine, so nothing depends on a laptop
+being on. Both are started by hand for now. The schedule goes on after a clean run.
+
+| Workflow | What it does |
+|---|---|
+| `data-refresh` | Restores the raw data from S3, downloads what is new, rebuilds `data/processed/`, saves both back |
+| `daily-forecast` | Does the same refresh, scores finished forecast days, then forecasts tomorrow, saving each result to S3 |
+
+State lives in one private S3 bucket (`raw/`, `processed/`, `forecasts/`, `scores/`). The workflows
+get temporary AWS access through GitHub's OpenID Connect token, limited to this repository's `main`
+branch and this one bucket, so no AWS keys are stored in GitHub. The champion model, about 10 MB, is
+committed under `models/champion/`.
+
+The first run on an empty bucket downloads everything from 2020 and took about 39 minutes. With the
+raw data already in S3, a run took about 2 minutes. The dataset rebuilt on the runner matched the
+one built locally (same shape and end date).
 
 ## Data
 
@@ -89,21 +114,20 @@ python main.py --skip-download         # only rebuild the processed files
 | [Open-Meteo](https://open-meteo.com/) ERA5 | Actual weather, 9 GB cities | training |
 | Open-Meteo previous runs | 48-hour-ahead ECMWF IFS forecast weather, from 2024-07 | scoring and live |
 
-Things worth knowing:
+Worth knowing:
 
-- **Gaps.** Elexon never published 414 half-hours on 20 days in 2020-2023. They are filled from
-  NESO's published `ND` for the same period (`reference/neso_demand_for_elexon_gaps.csv`) and flagged
-  `is_imputed`. Nothing is missing from 2024 onwards.
+- **Gaps.** Elexon had 414 half-hours gaps on 20 days in 2020-2023. They are filled with
+  NESO's published `ND` for the same period (`reference/neso_demand_for_elexon_gaps.csv`) and
+  flagged `is_imputed`. Nothing is missing from 2024 onwards.
 - **Benchmark timing.** NESO publishes its full-day forecast at about 08:45, after the 08:30
-  prediction time, so the benchmark uses the newest version published by 09:00. The cutoffs are
+  prediction time, so the benchmark is the newest version published by 09:00. The cutoffs are
   `PREDICTION_TIME` and `BENCHMARK_CUTOFF_TIME` in `data/download_utils.py`.
-- **Forecast-weather gap.** ECMWF cloud cover is missing from 17 to 22 April 2026 in the
-  Open-Meteo Previous Runs archive. Exclude those dates when cloud cover is used as a feature.
+- **Forecast-weather gap.** ECMWF cloud cover is missing from 17 to 22 April 2026 in the Open-Meteo.
 - **Weather lag.** ERA5 runs about 5 days behind, so training data ends about 5 days before today.
-  The live run does not need it: it uses forecast weather and demand up to two days back.
+  The live run doesn't need it, since it uses forecast weather and demand up to two days back.
 - **Embedded forecast timing.** NESO re-issues the forecast hourly, and an issue becomes visible
-  about 28 minutes after its timestamp. The 08:00 issue is therefore usable from about 08:30,
-  so schedule the daily run for around 08:45.
+  about 28 minutes after its timestamp. The 08:00 issue is usable from about 08:30, so run the daily
+  job at around 08:45.
 
 Data is used under each provider's own terms: Elexon and NESO open data licences, and Open-Meteo
 (CC BY 4.0, built on ECMWF and Copernicus ERA5). Please credit them if you reuse the outputs.
@@ -121,7 +145,9 @@ gb_demand_forecasting/
     build_dataset.py           merges everything into data/processed/gb_demand_merged.parquet
   features/                    lags.py, weather.py (bias correction), model_inputs.py
   models/                      catboost_ridge_blend.py, train.py (logs and registers in MLflow)
-  predictions/                 target_periods.py, predict.py (live day-ahead forecast)
+  predictions/                 target_periods.py, predict.py (live forecast), score.py (live scoring)
+models/champion/               the model predict.py serves, with its feature list
+.github/workflows/             data-refresh, daily-forecast (and a connection test)
 notebooks/                     01-05: EDA, features, benchmarks, model selection
 reference/                     small tracked reference data (NESO demand for Elexon's gaps)
 tests/                         pytest suite
@@ -136,8 +162,12 @@ python -m pytest tests
 
 ## Status
 
-Working: data pipeline, features, model, MLflow registry, live forecast (first saved forecast:
-2026-11-12), replay test.
+Working: data pipeline, features, model, MLflow registry, live forecast, replay test, live scoring
+against actual demand and the NESO forecast, and a cloud data refresh that rebuilds the dataset on a
+clean runner.
 
-Next: scheduled daily run and monthly retraining, a scoring job (live forecasts against actual
-demand and the NESO forecast, rolling MAE), and a small dashboard.
+In progress: the daily cloud forecast.
+
+Next: turn on the daily schedule, add periodic retraining with a controlled promotion of the
+champion model, add a rolling MAE to the scores, and build a small
+dashboard.
