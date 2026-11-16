@@ -1,17 +1,19 @@
 """
-Download and prepare the datasets used for GB electricity demand forecasting.
+Download and prepare data for GB electricity demand forecasting.
 
-The pipeline downloads Elexon demand observations, NESO forecasts,
-historical weather, and archived weather forecasts. It then prepares
-and combines the datasets for model training and evaluation.
+Collects electricity demand, renewable generation forecasts,
+historical weather, and archived weather forecasts from Elexon,
+NESO, and Open-Meteo.
 
-Run from the project root:
+The datasets are cleaned and combined for model training,
+evaluation, and live forecasting.
+
+Usage:
     python main.py
     python main.py --end-date 2026-10-01
     python main.py --skip-download
     python main.py --live
 """
-
 import argparse
 from datetime import date, timedelta
 from pathlib import Path
