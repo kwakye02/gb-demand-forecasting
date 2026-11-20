@@ -47,15 +47,13 @@ from the six-week baseline. Recent days count more: a day's training weight halv
 model is trained on actual weather and predicts with corrected forecast weather.
 
 **Live forecast.** `predict.py` builds the same feature matrix from live inputs and loads the
-champion model. It reads `models/champion/` (model files plus `model_info.json`, committed to the
-repo) if that folder exists, so it runs on a machine with no MLflow registry, and falls back to the
-registry's `champion` alias otherwise. A replay test checks that the live-built matrix equals the
-training-path matrix on past days, including both clock changes (46- and 50-period days).
+champion model, which is stored in the repo under `models/champion/`. A replay test checks that the
+live-built matrix equals the training-path matrix on past days, including both clock changes
+(46- and 50-period days).
 
 **Live scoring.** Once a day is complete, `score.py` compares each saved forecast with actual demand
 and with the NESO benchmark. It writes one row per day to `outputs/predictions/scores.parquet`: MAE
-and bias for the model and for NESO, plus the model version. A day is scored once, and a day with
-missing periods is skipped.
+and bias for the model and for NESO, plus the model version.
 
 ## Quick start
 
@@ -73,10 +71,9 @@ python -m gb_demand_forecasting.predictions.predict --date 2026-11-12 --no-save
 python -m gb_demand_forecasting.predictions.score              # score forecasts whose day is complete
 ```
 
-Forecasts are appended to `outputs/predictions/forecasts.parquet`, one row per half-hour, with the
-embedded-forecast issue time and the model version. The model registry is a local SQLite file
-(`mlflow.db`). After training, set the `champion` alias on the version you want to serve, then copy
-that version's model and `model_info.json` into `models/champion/` so the cloud run uses it.
+Forecasts are appended to `outputs/predictions/forecasts.parquet`, one row per half-hour. After
+training, set the `champion` alias on the version you want to serve in the local MLflow registry
+(`mlflow.db`), then copy that version's model and `model_info.json` into `models/champion/`.
 
 Other `main.py` options:
 
@@ -88,21 +85,16 @@ python main.py --skip-download         # only rebuild the processed files
 ## Daily run in the cloud
 
 Two GitHub Actions workflows run the pipeline on a clean machine, so nothing depends on a laptop
-being on. Both are started by hand for now. The schedule goes on after a clean run.
+being on. Both are started by hand for now, and the daily schedule is added once they run cleanly.
 
 | Workflow | What it does |
 |---|---|
 | `data-refresh` | Restores the raw data from S3, downloads what is new, rebuilds `data/processed/`, saves both back |
 | `daily-forecast` | Does the same refresh, scores finished forecast days, then forecasts tomorrow, saving each result to S3 |
 
-State lives in one private S3 bucket (`raw/`, `processed/`, `forecasts/`, `scores/`). The workflows
-get temporary AWS access through GitHub's OpenID Connect token, limited to this repository's `main`
-branch and this one bucket, so no AWS keys are stored in GitHub. The champion model, about 10 MB, is
-committed under `models/champion/`.
-
-The first run on an empty bucket downloads everything from 2020 and took about 39 minutes. With the
-raw data already in S3, a run took about 2 minutes. The dataset rebuilt on the runner matched the
-one built locally (same shape and end date).
+State is kept in a private S3 bucket (`raw/`, `processed/`, `forecasts/`, `scores/`), and the
+workflows use temporary AWS access, so no keys are stored in GitHub. With the raw data in S3, a
+refresh takes about 2 minutes instead of 39.
 
 ## Data
 
@@ -120,8 +112,7 @@ Worth knowing:
   NESO's published `ND` for the same period (`reference/neso_demand_for_elexon_gaps.csv`) and
   flagged `is_imputed`. Nothing is missing from 2024 onwards.
 - **Benchmark timing.** NESO publishes its full-day forecast at about 08:45, after the 08:30
-  prediction time, so the benchmark is the newest version published by 09:00. The cutoffs are
-  `PREDICTION_TIME` and `BENCHMARK_CUTOFF_TIME` in `data/download_utils.py`.
+  prediction time, so the benchmark is the newest version published by 09:00.
 - **Forecast-weather gap.** ECMWF cloud cover is missing from 17 to 22 April 2026 in the Open-Meteo.
 - **Weather lag.** ERA5 runs about 5 days behind, so training data ends about 5 days before today.
   The live run doesn't need it, since it uses forecast weather and demand up to two days back.
@@ -147,7 +138,7 @@ gb_demand_forecasting/
   models/                      catboost_ridge_blend.py, train.py (logs and registers in MLflow)
   predictions/                 target_periods.py, predict.py (live forecast), score.py (live scoring)
 models/champion/               the model predict.py serves, with its feature list
-.github/workflows/             data-refresh, daily-forecast (and a connection test)
+.github/workflows/             the cloud data-refresh and daily-forecast workflows
 notebooks/                     01-05: EDA, features, benchmarks, model selection
 reference/                     small tracked reference data (NESO demand for Elexon's gaps)
 tests/                         pytest suite
@@ -168,6 +159,5 @@ clean runner.
 
 In progress: the daily cloud forecast.
 
-Next: turn on the daily schedule, add periodic retraining with a controlled promotion of the
-champion model, add a rolling MAE to the scores, and build a small
-dashboard.
+Next: turn on the daily schedule, add periodic retraining, add a rolling MAE to the scores, and
+build a small dashboard.

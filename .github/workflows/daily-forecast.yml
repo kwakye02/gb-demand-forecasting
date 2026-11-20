@@ -2,6 +2,9 @@ name: daily-forecast
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '45 8 * * *'
+      timezone: 'Europe/London'
 
 permissions:
   id-token: write
