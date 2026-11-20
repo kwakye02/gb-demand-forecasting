@@ -16,16 +16,16 @@ classifiers = [
     "License :: OSI Approved :: MIT License"
 ]
 dependencies = [
-    "catboost",
-    "holidays",
-    "mlflow",
-    "numpy",
-    "pandas",
-    "pyarrow",
+    "catboost==1.2.10",
+    "holidays==0.106",
+    "mlflow==3.18.0",
+    "numpy==2.4.6",
+    "pandas==3.0.3",
+    "pyarrow==26.0.0",
     "requests",
     "requests-cache",
-    "scikit-learn",
-    "skops",
+    "scikit-learn==1.9.0",
+    "skops==0.16.0",
 ]
 requires-python = ">=3.10"
 
