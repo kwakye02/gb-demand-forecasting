@@ -93,8 +93,8 @@ def style_figure(figure, y_title=None, height=340):
     )
     if y_title:
         figure.update_layout(yaxis_title=y_title)
-    figure.update_xaxes(showgrid=False, linecolor=BORDER_COLOUR)
-    figure.update_yaxes(gridcolor=GRID_COLOUR, gridwidth=0.5, zeroline=False)
+    figure.update_xaxes(showgrid=False, linecolor=BORDER_COLOUR, fixedrange=True)
+    figure.update_yaxes(gridcolor=GRID_COLOUR, gridwidth=0.5, zeroline=False, fixedrange=True)
     return figure
 
 
