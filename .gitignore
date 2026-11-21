@@ -195,6 +195,7 @@ notebooks/mlruns/
 notebooks/archive/
 /mlruns/
 /outputs/predictions/
+/outputs/dashboard/
 # CatBoost training logs
 catboost_info/
 
