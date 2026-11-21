@@ -8,7 +8,7 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 concurrency:
   group: pipeline-state
@@ -91,3 +91,22 @@ jobs:
 
       - name: Save forecasts to S3
         run: aws s3 cp outputs/predictions/forecasts.parquet "s3://$S3_BUCKET/forecasts/forecasts.parquet"
+      
+      - name: Export dashboard data
+        run: python -m gb_demand_forecasting.reports.export_dashboard
+
+      - name: Publish dashboard data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin gh-pages > /dev/null; then
+            git fetch origin gh-pages
+            git worktree add -B gh-pages "$RUNNER_TEMP/pages" origin/gh-pages
+          else
+            git worktree add --orphan -b gh-pages "$RUNNER_TEMP/pages"
+          fi
+          cp outputs/dashboard/dashboard.json "$RUNNER_TEMP/pages/dashboard.json"
+          cd "$RUNNER_TEMP/pages"
+          git add dashboard.json
+          git diff --cached --quiet || git commit -m "Update dashboard data"
+          git push origin gh-pages
