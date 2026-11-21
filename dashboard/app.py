@@ -38,7 +38,8 @@ PAGE_STYLE = {
     "color": "#111827",
 }
 CARD_STYLE = {
-    "flex": "1 1 150px",
+    "flex": "1 1 140px",
+    "boxSizing": "border-box",
     "border": f"1px solid {BORDER_COLOUR}",
     "borderRadius": "8px",
     "padding": "12px 16px",
@@ -97,8 +98,8 @@ def style_figure(figure, y_title=None, height=340):
     return figure
 
 
-def label_every_two_hours(figure, labels):
-    figure.update_xaxes(tickmode="array", tickvals=labels[::4], tickangle=0)
+def label_every_four_hours(figure, labels):
+    figure.update_xaxes(tickmode="array", tickvals=labels[::8], tickangle=0)
     return figure
 
 
@@ -117,7 +118,7 @@ def forecast_figure(latest_forecast):
         marker={"color": MODEL_COLOUR, "size": 10}, hoverinfo="skip", showlegend=False,
     )
     figure.update_layout(showlegend=False)
-    return label_every_two_hours(style_figure(figure, "Demand (GW)"), labels)
+    return label_every_four_hours(style_figure(figure, "Demand (GW)"), labels)
 
 
 def accuracy_figure(daily_scores):
@@ -152,7 +153,7 @@ def day_review_figure(day_rows):
     style_figure(figure, height=520)
     figure.update_yaxes(title_text="Demand (GW)", row=1, col=1)
     figure.update_yaxes(title_text="Error (MW)", row=2, col=1)
-    return label_every_two_hours(figure, labels)
+    return label_every_four_hours(figure, labels)
 
 
 def section(title, *children):
